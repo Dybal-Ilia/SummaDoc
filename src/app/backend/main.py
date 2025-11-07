@@ -11,7 +11,7 @@ from src.core.summarizer.summarizer import Summarizer
 app = FastAPI(title="SummaDoc")
 
 UPLOAD_DIR = Path("src/uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ingestor = Ingestor()
 splitter = Splitter(max_chunk_size=2048, chunk_overlap=50)
