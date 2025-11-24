@@ -1,34 +1,57 @@
-from langchain_ollama.chat_models import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
-import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(name=__name__)
+from transformers import BartTokenizer, BartForConditionalGeneration
+import torch
+from src.core.utils import logger
 
 class Summarizer:
-    def __init__(self, llm:str = "llama3.1"):
-        self.llm = ChatOllama(model=llm)
-        system_prompt_template = """
-        You are an AI assistant responsible for creating textual summaries. You follow the 'MapReduce' strategy,
-        therefore you'll be provided with chunks of texts one by one. You are to make a good summary of each chunk.
-        It is very important that chunks are of good quality as then they'll be combined in one large text.
-        Also to help you loggically create summaries you are given a list of summaries so far: {summaries}.
-        Do not say anything like 'Ok, here's your summary', just summarize given chunks.
-        Do not make up any unexisting information.
-        Current chunk to summarize: {chunk}"""
-        self.prompt = ChatPromptTemplate.from_template(system_prompt_template)
-        self.chain = self.prompt | self.llm
+    def __init__(self, model_name="facebook/bart-large-cnn"):
 
-    def summarize(self, chunks:list[Document]):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.tokenizer:BartTokenizer = BartTokenizer.from_pretrained(model_name)
+        self.model:BartForConditionalGeneration = BartForConditionalGeneration.from_pretrained(model_name).to(self.device)
+        logger.info(f"Model is set to device: {self.device}")
+        
+    async def summarize(self, chunks: list) -> str:
+        """
+        Takes a list of Document chunks, summarizes each one, 
+        and joins them into a coherent bulleted list.
+        """
         summaries = []
         for i, chunk in enumerate(chunks):
-            response = self.chain.invoke({
-                "summaries": summaries,
-                "chunk": chunk.page_content
-            })
-            logger.info(f"Summarized chunk: {i+1}")
-            summary = response.content.strip()
-            summaries.append(summary)
-        return "".join(summaries)
+            logger.info(f"Summarizing chunk {i} / {len(chunks)}")
+            inputs = self.tokenizer(
+                chunk,
+                truncation=True,
+                max_length=1000,
+                return_tensors="pt"
+            ).to(self.device)
 
-            
+            summary_ids = self.model.generate(
+                **inputs,
+                max_length=600,
+                min_length=300,
+                num_beams=4,
+                length_penalty=2.0,
+                early_stopping=True,
+            )
+            summary = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            logger.info(f"Successfully generated summary for chunk {i} / {len(chunks)}")
+            summaries.append(summary)
+        
+        pre_summary = "\n".join(summaries)
+        inputs = self.tokenizer(
+            pre_summary,
+            truncation=True,
+            max_length=1000,
+            return_tensors="pt",
+        ).to(self.device)
+        logger.info("Starting final summarization")
+        summary_ids = self.model.generate(
+            **inputs,
+            max_length=1024,
+            min_length=600,
+            num_beams=4,
+            length_penalty=2.0,
+            early_stopping=True,
+        )
+        summary = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+        return summary
